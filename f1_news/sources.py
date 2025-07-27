@@ -103,11 +103,11 @@ class RaceResultSource:
             sessions_response.raise_for_status()
             year_sessions = sessions_response.json()
             
-            # Filter for completed sessions (in the past)
-            now = datetime.now()
+            # Filter for completed sessions (sessions that have ended)
+            now = datetime.utcnow()
             completed_sessions = [
                 session for session in year_sessions 
-                if datetime.fromisoformat(session['date_start'].replace('Z', '+00:00')).replace(tzinfo=None) < now
+                if datetime.fromisoformat(session['date_end'].replace('Z', '+00:00')).replace(tzinfo=None) < now
             ]
             
             latest_session = None
@@ -142,23 +142,38 @@ class RaceResultSource:
             drivers_response.raise_for_status()
             drivers_data = drivers_response.json()
             
-            # Get final intervals/times (latest data point for each driver)
-            intervals_lookup = {}
+            # Get lap data and calculate total race times
+            race_times = {}
             try:
-                intervals_response = requests.get(f"{self.base_url}/intervals?session_key={session_key}")
-                intervals_response.raise_for_status()
-                intervals_data = intervals_response.json()
+                laps_response = requests.get(f"{self.base_url}/laps?session_key={session_key}")
+                laps_response.raise_for_status()
+                laps_data = laps_response.json()
                 
-                # Create intervals lookup (get latest interval for each driver)
-                for interval in intervals_data:
-                    driver_num = interval.get('driver_number')
-                    date = interval.get('date')
-                    if driver_num and date:
-                        if driver_num not in intervals_lookup or date > intervals_lookup[driver_num]['date']:
-                            intervals_lookup[driver_num] = interval
+                # Calculate total race time for each driver
+                for lap in laps_data:
+                    driver_num = lap['driver_number']
+                    if driver_num not in race_times:
+                        race_times[driver_num] = 0
+                    if lap.get('lap_duration'):
+                        race_times[driver_num] += lap['lap_duration']
+                
+                # Find winner's time for gap calculations
+                winner_time = min(race_times.values()) if race_times else 0
+                
+                # Calculate fastest lap for each driver
+                driver_fastest_laps = {}
+                for lap in laps_data:
+                    driver_num = lap['driver_number']
+                    lap_time = lap.get('lap_duration')
+                    if lap_time:
+                        if driver_num not in driver_fastest_laps or lap_time < driver_fastest_laps[driver_num]:
+                            driver_fastest_laps[driver_num] = lap_time
+                
             except Exception as e:
-                print(f"Warning: Could not fetch intervals data: {e}")
-                intervals_lookup = {}
+                print(f"Warning: Could not fetch lap data: {e}")
+                race_times = {}
+                winner_time = 0
+                driver_fastest_laps = {}
             
             # Create driver lookup
             driver_lookup = {driver['driver_number']: driver for driver in drivers_data}
@@ -183,25 +198,33 @@ class RaceResultSource:
                     # Calculate points
                     points = points_table[position - 1] if position <= len(points_table) else 0
                     
-                    # Get race time from intervals
+                    # Format race time display
                     time_display = f"P{position}"  # Default fallback
-                    if driver_num in intervals_lookup:
-                        interval_data = intervals_lookup[driver_num]
-                        gap_to_leader = interval_data.get('gap_to_leader')
+                    if driver_num in race_times and race_times[driver_num] > 0:
+                        total_time = race_times[driver_num]
                         
                         if position == 1:
-                            # Winner gets race time (we'll use a placeholder since we don't have total time)
-                            time_display = "WINNER"
-                        elif gap_to_leader is not None and gap_to_leader > 0:
-                            # Format gap as +XX.XXX
-                            if gap_to_leader >= 60:
-                                minutes = int(gap_to_leader // 60)
-                                seconds = gap_to_leader % 60
-                                time_display = f"+{minutes}:{seconds:06.3f}"
-                            else:
-                                time_display = f"+{gap_to_leader:.3f}"
+                            # Winner gets total race time
+                            minutes = int(total_time // 60)
+                            seconds = total_time % 60
+                            time_display = f"{minutes}:{seconds:06.3f}"
                         else:
-                            time_display = f"P{position}"
+                            # Others get gap to winner
+                            gap = total_time - winner_time
+                            if gap >= 60:
+                                gap_minutes = int(gap // 60)
+                                gap_seconds = gap % 60
+                                time_display = f"+{gap_minutes}:{gap_seconds:06.3f}"
+                            else:
+                                time_display = f"+{gap:.3f}"
+                    
+                    # Format fastest lap time
+                    fastest_lap_display = ""
+                    if driver_num in driver_fastest_laps:
+                        fl_time = driver_fastest_laps[driver_num]
+                        fl_minutes = int(fl_time // 60)
+                        fl_seconds = fl_time % 60
+                        fastest_lap_display = f"{fl_minutes}:{fl_seconds:06.3f}"
                     
                     race_result = RaceResult(
                         position=position,
@@ -209,7 +232,7 @@ class RaceResultSource:
                         team=driver_info['team_name'],
                         time=time_display,
                         points=points,
-                        fastest_lap=False  # Would need additional API call for fastest lap
+                        fastest_lap=fastest_lap_display
                     )
                     results.append(race_result)
             

@@ -27,7 +27,7 @@ class RaceResult:
     team: str
     time: str
     points: int
-    fastest_lap: bool = False
+    fastest_lap: str = ""
 
 
 @dataclass

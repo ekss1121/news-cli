@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(pip install:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(f1-news:*)",
+      "Bash(ls:*)"
     ],
     "deny": []
   }

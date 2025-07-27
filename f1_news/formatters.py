@@ -136,17 +136,39 @@ class ResultFormatter:
         table.add_column("Team", style="cyan", width=25)
         table.add_column("Time", style="yellow", width=15)
         table.add_column("Points", style="green", width=8)
-        table.add_column("FL", style="red", width=3)  # Fastest Lap
+        table.add_column("Fastest Lap", style="red", width=12)  # Fastest Lap
+        
+        # Find the overall fastest lap time
+        fastest_overall = None
+        fastest_time = float('inf')
+        for result in race_results.results:
+            if result.fastest_lap:  # If driver has a fastest lap time
+                # Parse time string to compare (format: "M:SS.sss")
+                try:
+                    parts = result.fastest_lap.split(':')
+                    if len(parts) == 2:
+                        minutes = int(parts[0])
+                        seconds = float(parts[1])
+                        total_seconds = minutes * 60 + seconds
+                        if total_seconds < fastest_time:
+                            fastest_time = total_seconds
+                            fastest_overall = result.fastest_lap
+                except:
+                    pass
         
         for result in race_results.results:
-            fastest_lap_indicator = "*" if result.fastest_lap else ""
+            # Highlight the overall fastest lap in purple
+            fastest_lap_display = result.fastest_lap
+            if result.fastest_lap == fastest_overall:
+                fastest_lap_display = f"[purple]{result.fastest_lap}[/purple]"
+            
             table.add_row(
                 str(result.position),
                 result.driver,
                 result.team,
                 result.time,
                 str(result.points),
-                fastest_lap_indicator
+                fastest_lap_display
             )
         
         console.print(table)

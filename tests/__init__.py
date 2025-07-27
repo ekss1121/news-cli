@@ -1,0 +1,1 @@
+# Tests for F1 News CLI

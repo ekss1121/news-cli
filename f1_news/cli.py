@@ -23,9 +23,10 @@ def fetch_news_logic(source, sources, output_format, limit, team, driver, keywor
             console.print(f"[red]Invalid sources: {', '.join(invalid_sources)}[/red]")
             console.print(f"[yellow]Available sources: {', '.join(rss.rss_feeds.keys())}[/yellow]")
             return
-        console.print(f"[bold blue]Fetching F1 news from: {', '.join([available_sources[s] for s in selected_sources])}[/bold blue]")
+        source_names = [available_sources[s] for s in selected_sources]
+        console.print(f"[bold blue]Fetching F1 news from: {', '.join(source_names)}[/bold blue]")
     else:
-        console.print(f"[bold blue]Fetching F1 news from all sources...[/bold blue]")
+        console.print("[bold blue]Fetching F1 news from all sources...[/bold blue]")
     
     news_items = []
     fetch_limit = limit * 3 if any([team, driver, keyword]) else limit
@@ -68,10 +69,11 @@ def fetch_news_logic(source, sources, output_format, limit, team, driver, keywor
 
 
 @click.group(invoke_without_command=True)
-@click.option('--source', type=click.Choice(['rss']), 
+@click.option('--source', type=click.Choice(['rss']),
               default='rss', help='Source to fetch news from')
-@click.option('--sources', help='Comma-separated list of specific news sources (formula1_headlines,autosport,motorsport,espn)')
-@click.option('--format', 'output_format', type=click.Choice(['terminal', 'json', 'markdown']), 
+@click.option('--sources', 
+              help='Comma-separated list of specific news sources (formula1_headlines,autosport,motorsport,espn)')
+@click.option('--format', 'output_format', type=click.Choice(['terminal', 'json', 'markdown']),
               default='terminal', help='Output format')
 @click.option('--limit', default=10, help='Maximum number of news items to fetch')
 @click.option('--team', help='Filter by F1 team')
@@ -87,10 +89,11 @@ def main(ctx, source, sources, output_format, limit, team, driver, keyword):
 
 
 @main.command()
-@click.option('--source', type=click.Choice(['rss']), 
+@click.option('--source', type=click.Choice(['rss']),
               default='rss', help='Source to fetch news from')
-@click.option('--sources', help='Comma-separated list of specific news sources (formula1_headlines,autosport,motorsport,espn)')
-@click.option('--format', 'output_format', type=click.Choice(['terminal', 'json', 'markdown']), 
+@click.option('--sources', 
+              help='Comma-separated list of specific news sources (formula1_headlines,autosport,motorsport,espn)')
+@click.option('--format', 'output_format', type=click.Choice(['terminal', 'json', 'markdown']),
               default='terminal', help='Output format')
 @click.option('--limit', default=10, help='Maximum number of news items to fetch')
 @click.option('--team', help='Filter by F1 team')
@@ -105,7 +108,7 @@ def fetch(source, sources, output_format, limit, team, driver, keyword):
 @click.option('--team', help='Filter by F1 team')
 @click.option('--driver', help='Filter by F1 driver')
 @click.option('--keyword', help='Filter by custom keyword')
-@click.option('--format', 'output_format', type=click.Choice(['terminal', 'json', 'markdown']), 
+@click.option('--format', 'output_format', type=click.Choice(['terminal', 'json', 'markdown']),
               default='terminal', help='Output format')
 @click.option('--limit', default=10, help='Maximum number of news items to fetch')
 def filter(team, driver, keyword, output_format, limit):
@@ -177,13 +180,13 @@ def sources():
         table.add_row(key, name, url)
     
     console.print(table)
-    console.print(f"\n[dim]Usage: f1-news fetch --sources formula1_headlines,autosport[/dim]")
+    console.print("\n[dim]Usage: f1-news fetch --sources formula1_headlines,autosport[/dim]")
 
 
 @main.command()
-@click.option('--practice', type=click.Choice(['1', '2', '3', 'all']), 
+@click.option('--practice', type=click.Choice(['1', '2', '3', 'all']),
               help='Show practice session results (1, 2, 3, or all)')
-@click.option('--session', type=click.Choice(['race', 'qualifying', 'practice']), 
+@click.option('--session', type=click.Choice(['race', 'qualifying', 'practice']),
               default='race', help='Type of session to show results for')
 def result(practice, session):
     """Show the most recent F1 session results."""

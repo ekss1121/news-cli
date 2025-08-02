@@ -52,36 +52,53 @@ class TerminalFormatter:
     """Format news items for terminal display."""
     
     def format_news(self, news_items: List[NewsItem]):
-        """Display news items in a rich terminal format."""
+        """Display news items in a rich terminal format with detailed panels."""
         if not news_items:
             console.print("[yellow]No news items found.[/yellow]")
             return
+        
+        # Display header
+        console.print(f"\n[bold blue]📰 F1 News ({len(news_items)} items)[/bold blue]\n")
+        
+        # Show detailed view for each news item
+        for i, item in enumerate(news_items, 1):
+            # Extract keywords for this item
+            keywords = extract_keywords(item.content + " " + item.title, 5)
             
-        table = Table(title="F1 News")
-        table.add_column("Title", style="magenta")
-        table.add_column("Keywords", style="cyan")
-        table.add_column("Time", style="yellow")
-        
-        for item in news_items:
-            keywords = extract_keywords(item.content + " " + item.title, 4)
-            title_text = item.title[:60] + "..." if len(item.title) > 60 else item.title
-            table.add_row(
-                f"[link={item.url}]{title_text}[/link]",
-                ", ".join(keywords) if keywords else "N/A",
-                item.timestamp.strftime("%Y-%m-%d %H:%M") if item.timestamp else "Unknown"
-            )
-        
-        console.print(table)
-        
-        # Show detailed view for first item
-        if news_items:
-            first_item = news_items[0]
+            # Format timestamp
+            time_str = item.timestamp.strftime("%Y-%m-%d %H:%M") if item.timestamp else "Unknown time"
+            
+            # Format source
+            source_str = f" • {item.source}" if item.source else ""
+            
+            # Clean content - remove HTML tags and truncate
+            clean_content = re.sub(r'<[^>]+>', '', item.content)
+            clean_content = re.sub(r'\s+', ' ', clean_content).strip()
+            
+            # Show more content but still truncate if very long
+            content_preview = clean_content[:400] + "..." if len(clean_content) > 400 else clean_content
+            
+            # Create the panel content
+            panel_content = f"[bold]{item.title}[/bold]\n"
+            panel_content += f"[dim]{time_str}{source_str}[/dim]\n"
+            if keywords:
+                panel_content += f"[cyan]Keywords: {', '.join(keywords)}[/cyan]\n"
+            panel_content += f"\n{content_preview}\n"
+            panel_content += f"\n[link={item.url}]🔗 Read full article[/link]"
+            
+            # Create panel with item number
             panel = Panel(
-                f"[bold]{first_item.title}[/bold]\n\n{first_item.content[:200]}...\n\n[link={first_item.url}]Read more[/link]",
-                title="Latest News Detail",
-                expand=False
+                panel_content,
+                title=f"News Item #{i}",
+                title_align="left",
+                expand=False,
+                border_style="blue"
             )
             console.print(panel)
+            
+            # Add spacing between items (except after the last one)
+            if i < len(news_items):
+                console.print("")
 
 
 class JSONFormatter:

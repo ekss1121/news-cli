@@ -56,31 +56,73 @@ class RSSSource:
     """Fetch F1 news from RSS feeds."""
     
     def __init__(self):
-        self.rss_feeds = [
-            "https://www.formula1.com/en/latest/headlines.xml",
-            "https://www.autosport.com/rss/feed/f1",
-        ]
+        self.rss_feeds = {
+            "formula1_headlines": "https://www.formula1.com/en/latest/headlines.xml",
+            "formula1_all": "https://www.formula1.com/en/latest/all.xml",
+            "autosport": "https://www.autosport.com/rss/feed/f1",
+            "motorsport": "https://www.motorsport.com/rss/f1/news/",
+            "espn": "https://feeds.espn.com/rss/story/motorsports/story",
+        }
         
-    def fetch_news(self, limit: int = 10) -> List[NewsItem]:
+        # Friendly names for sources
+        self.source_names = {
+            "formula1_headlines": "Formula 1 Official (Headlines)",
+            "formula1_all": "Formula 1 Official (All Content)",
+            "autosport": "Autosport",
+            "motorsport": "Motorsport.com",
+            "espn": "ESPN Motorsports",
+        }
+        
+    def fetch_news(self, limit: int = 10, sources: list = None) -> List[NewsItem]:
         """Fetch F1 news from RSS feeds."""
         news_items = []
         
-        for feed_url in self.rss_feeds:
+        # If no specific sources specified, use all sources
+        if sources is None:
+            sources = list(self.rss_feeds.keys())
+        
+        # Validate source names
+        valid_sources = [s for s in sources if s in self.rss_feeds]
+        if not valid_sources:
+            print(f"Warning: No valid sources found. Available sources: {list(self.rss_feeds.keys())}")
+            return []
+        
+        for source_key in valid_sources:
+            feed_url = self.rss_feeds[source_key]
+            source_name = self.source_names[source_key]
+            
             try:
+                print(f"Fetching from {source_name}...")
                 feed = feedparser.parse(feed_url)
+                
+                if not hasattr(feed, 'entries') or not feed.entries:
+                    print(f"Warning: No entries found for {source_name}")
+                    continue
+                
                 for entry in feed.entries[:limit]:
+                    # Skip entries without required fields
+                    if not hasattr(entry, 'title') or not hasattr(entry, 'link'):
+                        continue
+                        
                     news_item = NewsItem(
                         title=entry.title,
-                        content=getattr(entry, 'summary', ''),
+                        content=getattr(entry, 'summary', getattr(entry, 'description', '')),
                         url=entry.link,
-                        source=f"rss_{feed.feed.title}" if hasattr(feed.feed, 'title') else "rss",
-                        timestamp=datetime(*entry.published_parsed[:6]) if hasattr(entry, 'published_parsed') else None
+                        source=source_name,
+                        timestamp=datetime(*entry.published_parsed[:6]) if hasattr(entry, 'published_parsed') and entry.published_parsed else None
                     )
                     news_items.append(news_item)
+                    
             except Exception as e:
-                print(f"Error fetching RSS feed {feed_url}: {e}")
+                print(f"Error fetching RSS feed {source_name} ({feed_url}): {e}")
         
+        # Sort by timestamp (newest first) and limit results
+        news_items = sorted(news_items, key=lambda x: x.timestamp or datetime.min, reverse=True)
         return news_items[:limit]
+    
+    def get_available_sources(self) -> dict:
+        """Get list of available news sources."""
+        return self.source_names.copy()
 
 
 class RaceResultSource:
@@ -276,3 +318,136 @@ class RaceResultSource:
                     RaceResult(5, "Lando Norris", "McLaren", "+1:13.715", 10, False),
                 ]
             )
+    
+    def fetch_practice_results(self, practice_number: int = None) -> List[RaceResults]:
+        """Fetch practice session results. If practice_number is specified (1, 2, 3), fetch that specific session."""
+        try:
+            current_year = datetime.now().year
+            
+            # Get all sessions for current year
+            sessions_response = requests.get(f"{self.base_url}/sessions?year={current_year}")
+            sessions_response.raise_for_status()
+            year_sessions = sessions_response.json()
+            
+            # Filter for completed practice sessions
+            now = datetime.utcnow()
+            practice_sessions = []
+            
+            for session in year_sessions:
+                if (session['session_type'] == 'Practice' and 
+                    datetime.fromisoformat(session['date_end'].replace('Z', '+00:00')).replace(tzinfo=None) < now):
+                    practice_sessions.append(session)
+            
+            if not practice_sessions:
+                return []
+            
+            # Group by meeting and get the latest meeting's practice sessions
+            sessions_by_meeting = {}
+            for session in practice_sessions:
+                meeting_key = session['meeting_key']
+                if meeting_key not in sessions_by_meeting:
+                    sessions_by_meeting[meeting_key] = []
+                sessions_by_meeting[meeting_key].append(session)
+            
+            # Get the latest meeting based on date, not meeting key
+            latest_meeting_key = None
+            latest_date = None
+            
+            for meeting_key, sessions in sessions_by_meeting.items():
+                # Use the earliest session date for this meeting as reference
+                meeting_date = min(datetime.fromisoformat(session['date_start'].replace('Z', '+00:00')) for session in sessions)
+                if latest_date is None or meeting_date > latest_date:
+                    latest_date = meeting_date
+                    latest_meeting_key = meeting_key
+            
+            meeting_practice_sessions = sessions_by_meeting[latest_meeting_key]
+            
+            # Sort practice sessions by session name (FP1, FP2, FP3)
+            meeting_practice_sessions.sort(key=lambda x: x['session_name'])
+            
+            # Filter by specific practice number if requested
+            if practice_number is not None:
+                practice_name = f"Practice {practice_number}"
+                meeting_practice_sessions = [s for s in meeting_practice_sessions if s['session_name'] == practice_name]
+                if not meeting_practice_sessions:
+                    return []
+            
+            practice_results = []
+            
+            for session in meeting_practice_sessions:
+                session_key = session['session_key']
+                
+                try:
+                    # Get drivers for this session
+                    drivers_response = requests.get(f"{self.base_url}/drivers?session_key={session_key}")
+                    drivers_response.raise_for_status()
+                    drivers_data = drivers_response.json()
+                    
+                    # Get lap times for this session to determine fastest times and positions
+                    laps_response = requests.get(f"{self.base_url}/laps?session_key={session_key}")
+                    laps_response.raise_for_status()
+                    laps_data = laps_response.json()
+                    
+                    # Calculate fastest lap for each driver
+                    driver_fastest_laps = {}
+                    for lap in laps_data:
+                        driver_num = lap['driver_number']
+                        lap_time = lap.get('lap_duration')
+                        if lap_time and lap_time > 0:  # Valid lap time
+                            if driver_num not in driver_fastest_laps or lap_time < driver_fastest_laps[driver_num]:
+                                driver_fastest_laps[driver_num] = lap_time
+                    
+                    # Create driver lookup
+                    driver_lookup = {driver['driver_number']: driver for driver in drivers_data}
+                    
+                    # Create results sorted by fastest lap time
+                    results = []
+                    position = 1
+                    
+                    # Sort drivers by their fastest lap time
+                    sorted_drivers = sorted(driver_fastest_laps.items(), key=lambda x: x[1])
+                    
+                    for driver_num, fastest_time in sorted_drivers:
+                        if driver_num in driver_lookup:
+                            driver_info = driver_lookup[driver_num]
+                            
+                            # Format time display
+                            minutes = int(fastest_time // 60)
+                            seconds = fastest_time % 60
+                            time_display = f"{minutes}:{seconds:06.3f}"
+                            
+                            # Format fastest lap display (same as time for practice)
+                            fastest_lap_display = time_display
+                            
+                            race_result = RaceResult(
+                                position=position,
+                                driver=driver_info['full_name'],
+                                team=driver_info['team_name'],
+                                time=time_display,
+                                points=0,  # No points in practice
+                                fastest_lap=fastest_lap_display
+                            )
+                            results.append(race_result)
+                            position += 1
+                    
+                    # Create session name
+                    session_name = f"{session['country_name']} {session['session_name']}"
+                    date = datetime.fromisoformat(session['date_start'].replace('Z', '+00:00'))
+                    circuit = session['location']
+                    
+                    practice_results.append(RaceResults(
+                        race_name=session_name,
+                        date=date,
+                        circuit=circuit,
+                        results=results
+                    ))
+                    
+                except Exception as e:
+                    print(f"Error fetching practice session {session['session_name']}: {e}")
+                    continue
+            
+            return practice_results
+            
+        except Exception as e:
+            print(f"OpenF1 API Error: {e}")
+            return []

@@ -4,7 +4,7 @@ import feedparser
 import requests
 import json
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 from .models import NewsItem, RaceResults, RaceResult
 
 
@@ -73,7 +73,7 @@ class RSSSource:
             "espn": "ESPN Motorsports",
         }
         
-    def fetch_news(self, limit: int = 10, sources: list = None) -> List[NewsItem]:
+    def fetch_news(self, limit: int = 10, sources: Optional[list] = None) -> List[NewsItem]:
         """Fetch F1 news from RSS feeds."""
         news_items = []
         
@@ -132,42 +132,27 @@ class RaceResultSource:
         # Using OpenF1 API for F1 data (free and reliable)
         self.base_url = "https://api.openf1.org/v1"
         
-    def fetch_latest_results(self) -> RaceResults:
+    def fetch_latest_results(self, session_type: str) -> RaceResults:
         """Fetch the most recent session results (Race, Qualifying, Sprint, etc.)."""
         try:
             current_year = datetime.now().year
             
-            # Session types to try in order of preference
-            session_types = ['Race', 'Qualifying', 'Sprint', 'Practice']
+            if session_type:
+                session_types = [session_type.capitalize()]
+            else:
+                session_types = ['Race', 'Qualifying', 'Sprint', 'Practice']
             
             # Get all sessions for current year only
             sessions_response = requests.get(f"{self.base_url}/sessions?year={current_year}")
             sessions_response.raise_for_status()
             year_sessions = sessions_response.json()
             
-            # Filter for completed sessions (sessions that have ended)
-            now = datetime.utcnow()
-            completed_sessions = [
-                session for session in year_sessions 
-                if datetime.fromisoformat(session['date_end'].replace('Z', '+00:00')).replace(tzinfo=None) < now
-            ]
-            
             latest_session = None
-            if completed_sessions:
-                # Try to find the most recent session of preferred types
-                for session_type in session_types:
-                    if session_type == 'Sprint':
-                        # Sprint sessions have session_type="Race" but session_name="Sprint"
-                        type_sessions = [s for s in completed_sessions 
-                                       if s['session_type'] == 'Race' and s['session_name'] == 'Sprint']
-                    else:
-                        # Regular sessions match by session_type
-                        type_sessions = [s for s in completed_sessions 
-                                       if s['session_type'] == session_type and s['session_name'] != 'Sprint']
-                    
-                    if type_sessions:
-                        latest_session = type_sessions[-1]  # Most recent of this type
-                        break
+            for session in reversed(year_sessions):
+                if session['session_type'] in session_types:
+                    latest_session = session
+                    print(f"Found latest session: {latest_session['session_type']} on {latest_session['session_key']}")
+                    break
             
             if not latest_session:
                 raise Exception(f"No completed sessions found for {current_year}")
@@ -184,32 +169,41 @@ class RaceResultSource:
             drivers_response.raise_for_status()
             drivers_data = drivers_response.json()
             
-            # Get lap data and calculate total race times
+            # Get lap data and calculate session-specific times
             race_times = {}
+            driver_fastest_laps = {}
+            winner_time = 0
+            
             try:
                 laps_response = requests.get(f"{self.base_url}/laps?session_key={session_key}")
                 laps_response.raise_for_status()
                 laps_data = laps_response.json()
                 
-                # Calculate total race time for each driver
-                for lap in laps_data:
-                    driver_num = lap['driver_number']
-                    if driver_num not in race_times:
-                        race_times[driver_num] = 0
-                    if lap.get('lap_duration'):
-                        race_times[driver_num] += lap['lap_duration']
-                
-                # Find winner's time for gap calculations
-                winner_time = min(race_times.values()) if race_times else 0
-                
-                # Calculate fastest lap for each driver
-                driver_fastest_laps = {}
+                # Calculate fastest lap for each driver first
                 for lap in laps_data:
                     driver_num = lap['driver_number']
                     lap_time = lap.get('lap_duration')
-                    if lap_time:
+                    if lap_time and lap_time > 0:  # Valid lap time
                         if driver_num not in driver_fastest_laps or lap_time < driver_fastest_laps[driver_num]:
                             driver_fastest_laps[driver_num] = lap_time
+                
+                # Session-specific calculations
+                if latest_session['session_type'] == 'Qualifying':
+                    # For qualifying, fastest lap times are the main times, no cumulative calculation needed
+                    race_times = driver_fastest_laps.copy()
+                    # Find fastest overall qualifying time
+                    winner_time = min(driver_fastest_laps.values()) if driver_fastest_laps else 0
+                else:
+                    # For race sessions, calculate total race time for each driver
+                    for lap in laps_data:
+                        driver_num = lap['driver_number']
+                        if driver_num not in race_times:
+                            race_times[driver_num] = 0
+                        if lap.get('lap_duration'):
+                            race_times[driver_num] += lap['lap_duration']
+                    
+                    # Find winner's time for gap calculations
+                    winner_time = min(race_times.values()) if race_times else 0
                 
             except Exception as e:
                 print(f"Warning: Could not fetch lap data: {e}")
@@ -232,51 +226,119 @@ class RaceResultSource:
             results = []
             points_table = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1] + [0] * 10  # F1 points system
             
-            for driver_num, pos_data in final_positions.items():
-                if driver_num in driver_lookup:
-                    driver_info = driver_lookup[driver_num]
-                    position = pos_data['position']
+            if latest_session['session_type'] == 'Qualifying':
+                # For qualifying, use session_result API to get official positions and Q3 times
+                try:
+                    session_result_response = requests.get(f"{self.base_url}/session_result?session_key={session_key}")
+                    session_result_response.raise_for_status()
+                    session_results = session_result_response.json()
                     
-                    # Calculate points
-                    points = points_table[position - 1] if position <= len(points_table) else 0
-                    
-                    # Format race time display
-                    time_display = f"P{position}"  # Default fallback
-                    if driver_num in race_times and race_times[driver_num] > 0:
-                        total_time = race_times[driver_num]
-                        
-                        if position == 1:
-                            # Winner gets total race time
-                            minutes = int(total_time // 60)
-                            seconds = total_time % 60
-                            time_display = f"{minutes}:{seconds:06.3f}"
-                        else:
-                            # Others get gap to winner
-                            gap = total_time - winner_time
-                            if gap >= 60:
-                                gap_minutes = int(gap // 60)
-                                gap_seconds = gap % 60
-                                time_display = f"+{gap_minutes}:{gap_seconds:06.3f}"
+                    for result in session_results:
+                        driver_num = result['driver_number']
+                        if driver_num in driver_lookup:
+                            driver_info = driver_lookup[driver_num]
+                            position = result['position']
+                            
+                            # Use Q3 time (third element in duration array) for the qualifying time
+                            qualifying_time = None
+                            if result['duration'] and len(result['duration']) >= 3 and result['duration'][2] is not None:
+                                qualifying_time = result['duration'][2]  # Q3 time
+                            elif result['duration'] and len(result['duration']) >= 2 and result['duration'][1] is not None:
+                                qualifying_time = result['duration'][1]  # Q2 time if no Q3
+                            elif result['duration'] and len(result['duration']) >= 1 and result['duration'][0] is not None:
+                                qualifying_time = result['duration'][0]  # Q1 time if no Q2/Q3
+                            
+                            # Format qualifying time
+                            if qualifying_time:
+                                fl_minutes = int(qualifying_time // 60)
+                                fl_seconds = qualifying_time % 60
+                                fastest_lap_display = f"{fl_minutes}:{fl_seconds:06.3f}"
                             else:
-                                time_display = f"+{gap:.3f}"
+                                fastest_lap_display = "No time"
+                            
+                            race_result = RaceResult(
+                                position=position,
+                                driver=driver_info['full_name'],
+                                team=driver_info['team_name'],
+                                time="",  # No race time for qualifying
+                                points=0,  # No points for qualifying
+                                fastest_lap=fastest_lap_display
+                            )
+                            results.append(race_result)
+                            
+                except Exception as e:
+                    print(f"Warning: Could not fetch session results: {e}")
+                    # Fallback to previous method if session_result API fails
+                    qualifying_results = []
+                    for driver_num in driver_lookup:
+                        if driver_num in driver_fastest_laps:
+                            qualifying_results.append((driver_num, driver_fastest_laps[driver_num]))
                     
-                    # Format fastest lap time
-                    fastest_lap_display = ""
-                    if driver_num in driver_fastest_laps:
-                        fl_time = driver_fastest_laps[driver_num]
-                        fl_minutes = int(fl_time // 60)
-                        fl_seconds = fl_time % 60
+                    qualifying_results.sort(key=lambda x: x[1])
+                    
+                    for position, (driver_num, fastest_time) in enumerate(qualifying_results, 1):
+                        driver_info = driver_lookup[driver_num]
+                        
+                        fl_minutes = int(fastest_time // 60)
+                        fl_seconds = fastest_time % 60
                         fastest_lap_display = f"{fl_minutes}:{fl_seconds:06.3f}"
-                    
-                    race_result = RaceResult(
-                        position=position,
-                        driver=driver_info['full_name'],
-                        team=driver_info['team_name'],
-                        time=time_display,
-                        points=points,
-                        fastest_lap=fastest_lap_display
-                    )
-                    results.append(race_result)
+                        
+                        race_result = RaceResult(
+                            position=position,
+                            driver=driver_info['full_name'],
+                            team=driver_info['team_name'],
+                            time="",
+                            points=0,
+                            fastest_lap=fastest_lap_display
+                        )
+                        results.append(race_result)
+            else:
+                # For race/practice sessions, use position data
+                for driver_num, pos_data in final_positions.items():
+                    if driver_num in driver_lookup:
+                        driver_info = driver_lookup[driver_num]
+                        position = pos_data['position']
+                        
+                        # Calculate points
+                        points = points_table[position - 1] if position <= len(points_table) else 0
+                        
+                        # Format race time display
+                        time_display = f"P{position}"  # Default fallback
+                        if driver_num in race_times and race_times[driver_num] > 0:
+                            total_time = race_times[driver_num]
+                            
+                            if position == 1:
+                                # Winner gets total race time
+                                minutes = int(total_time // 60)
+                                seconds = total_time % 60
+                                time_display = f"{minutes}:{seconds:06.3f}"
+                            else:
+                                # Others get gap to winner
+                                gap = total_time - winner_time
+                                if gap >= 60:
+                                    gap_minutes = int(gap // 60)
+                                    gap_seconds = gap % 60
+                                    time_display = f"+{gap_minutes}:{gap_seconds:06.3f}"
+                                else:
+                                    time_display = f"+{gap:.3f}"
+                        
+                        # Format fastest lap time
+                        fastest_lap_display = ""
+                        if driver_num in driver_fastest_laps:
+                            fl_time = driver_fastest_laps[driver_num]
+                            fl_minutes = int(fl_time // 60)
+                            fl_seconds = fl_time % 60
+                            fastest_lap_display = f"{fl_minutes}:{fl_seconds:06.3f}"
+                        
+                        race_result = RaceResult(
+                            position=position,
+                            driver=driver_info['full_name'],
+                            team=driver_info['team_name'],
+                            time=time_display,
+                            points=points,
+                            fastest_lap=fastest_lap_display
+                        )
+                        results.append(race_result)
             
             # Sort by position
             results.sort(key=lambda x: x.position)
@@ -318,136 +380,3 @@ class RaceResultSource:
                     RaceResult(5, "Lando Norris", "McLaren", "+1:13.715", 10, False),
                 ]
             )
-    
-    def fetch_practice_results(self, practice_number: int = None) -> List[RaceResults]:
-        """Fetch practice session results. If practice_number is specified (1, 2, 3), fetch that specific session."""
-        try:
-            current_year = datetime.now().year
-            
-            # Get all sessions for current year
-            sessions_response = requests.get(f"{self.base_url}/sessions?year={current_year}")
-            sessions_response.raise_for_status()
-            year_sessions = sessions_response.json()
-            
-            # Filter for completed practice sessions
-            now = datetime.utcnow()
-            practice_sessions = []
-            
-            for session in year_sessions:
-                if (session['session_type'] == 'Practice' and 
-                    datetime.fromisoformat(session['date_end'].replace('Z', '+00:00')).replace(tzinfo=None) < now):
-                    practice_sessions.append(session)
-            
-            if not practice_sessions:
-                return []
-            
-            # Group by meeting and get the latest meeting's practice sessions
-            sessions_by_meeting = {}
-            for session in practice_sessions:
-                meeting_key = session['meeting_key']
-                if meeting_key not in sessions_by_meeting:
-                    sessions_by_meeting[meeting_key] = []
-                sessions_by_meeting[meeting_key].append(session)
-            
-            # Get the latest meeting based on date, not meeting key
-            latest_meeting_key = None
-            latest_date = None
-            
-            for meeting_key, sessions in sessions_by_meeting.items():
-                # Use the earliest session date for this meeting as reference
-                meeting_date = min(datetime.fromisoformat(session['date_start'].replace('Z', '+00:00')) for session in sessions)
-                if latest_date is None or meeting_date > latest_date:
-                    latest_date = meeting_date
-                    latest_meeting_key = meeting_key
-            
-            meeting_practice_sessions = sessions_by_meeting[latest_meeting_key]
-            
-            # Sort practice sessions by session name (FP1, FP2, FP3)
-            meeting_practice_sessions.sort(key=lambda x: x['session_name'])
-            
-            # Filter by specific practice number if requested
-            if practice_number is not None:
-                practice_name = f"Practice {practice_number}"
-                meeting_practice_sessions = [s for s in meeting_practice_sessions if s['session_name'] == practice_name]
-                if not meeting_practice_sessions:
-                    return []
-            
-            practice_results = []
-            
-            for session in meeting_practice_sessions:
-                session_key = session['session_key']
-                
-                try:
-                    # Get drivers for this session
-                    drivers_response = requests.get(f"{self.base_url}/drivers?session_key={session_key}")
-                    drivers_response.raise_for_status()
-                    drivers_data = drivers_response.json()
-                    
-                    # Get lap times for this session to determine fastest times and positions
-                    laps_response = requests.get(f"{self.base_url}/laps?session_key={session_key}")
-                    laps_response.raise_for_status()
-                    laps_data = laps_response.json()
-                    
-                    # Calculate fastest lap for each driver
-                    driver_fastest_laps = {}
-                    for lap in laps_data:
-                        driver_num = lap['driver_number']
-                        lap_time = lap.get('lap_duration')
-                        if lap_time and lap_time > 0:  # Valid lap time
-                            if driver_num not in driver_fastest_laps or lap_time < driver_fastest_laps[driver_num]:
-                                driver_fastest_laps[driver_num] = lap_time
-                    
-                    # Create driver lookup
-                    driver_lookup = {driver['driver_number']: driver for driver in drivers_data}
-                    
-                    # Create results sorted by fastest lap time
-                    results = []
-                    position = 1
-                    
-                    # Sort drivers by their fastest lap time
-                    sorted_drivers = sorted(driver_fastest_laps.items(), key=lambda x: x[1])
-                    
-                    for driver_num, fastest_time in sorted_drivers:
-                        if driver_num in driver_lookup:
-                            driver_info = driver_lookup[driver_num]
-                            
-                            # Format time display
-                            minutes = int(fastest_time // 60)
-                            seconds = fastest_time % 60
-                            time_display = f"{minutes}:{seconds:06.3f}"
-                            
-                            # Format fastest lap display (same as time for practice)
-                            fastest_lap_display = time_display
-                            
-                            race_result = RaceResult(
-                                position=position,
-                                driver=driver_info['full_name'],
-                                team=driver_info['team_name'],
-                                time=time_display,
-                                points=0,  # No points in practice
-                                fastest_lap=fastest_lap_display
-                            )
-                            results.append(race_result)
-                            position += 1
-                    
-                    # Create session name
-                    session_name = f"{session['country_name']} {session['session_name']}"
-                    date = datetime.fromisoformat(session['date_start'].replace('Z', '+00:00'))
-                    circuit = session['location']
-                    
-                    practice_results.append(RaceResults(
-                        race_name=session_name,
-                        date=date,
-                        circuit=circuit,
-                        results=results
-                    ))
-                    
-                except Exception as e:
-                    print(f"Error fetching practice session {session['session_name']}: {e}")
-                    continue
-            
-            return practice_results
-            
-        except Exception as e:
-            print(f"OpenF1 API Error: {e}")
-            return []

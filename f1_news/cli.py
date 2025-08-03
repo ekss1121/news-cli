@@ -9,28 +9,14 @@ from .formatters import TerminalFormatter, JSONFormatter, MarkdownFormatter, Res
 console = Console()
 
 
-def fetch_news_logic(source, sources, output_format, limit, team, driver, keyword):
+def fetch_news_logic(output_format, limit, team, driver, keyword):
     """Core logic for fetching F1 news."""
     rss = RSSSource()
     
-    # Parse sources parameter
-    selected_sources = None
-    if sources:
-        selected_sources = [s.strip() for s in sources.split(',')]
-        available_sources = rss.get_available_sources()
-        invalid_sources = [s for s in selected_sources if s not in rss.rss_feeds]
-        if invalid_sources:
-            console.print(f"[red]Invalid sources: {', '.join(invalid_sources)}[/red]")
-            console.print(f"[yellow]Available sources: {', '.join(rss.rss_feeds.keys())}[/yellow]")
-            return
-        source_names = [available_sources[s] for s in selected_sources]
-        console.print(f"[bold blue]Fetching F1 news from: {', '.join(source_names)}[/bold blue]")
-    else:
-        console.print("[bold blue]Fetching F1 news from all sources...[/bold blue]")
-    
+    console.print("[bold blue]Fetching F1 news from all sources...[/bold blue]")
     news_items = []
     fetch_limit = limit * 3 if any([team, driver, keyword]) else limit
-    news_items.extend(rss.fetch_news(limit=fetch_limit, sources=selected_sources))
+    news_items.extend(rss.fetch_news(limit=fetch_limit))
     
     # Apply filters if specified
     if any([team, driver, keyword]):
@@ -69,10 +55,6 @@ def fetch_news_logic(source, sources, output_format, limit, team, driver, keywor
 
 
 @click.group(invoke_without_command=True)
-@click.option('--source', type=click.Choice(['rss']),
-              default='rss', help='Source to fetch news from')
-@click.option('--sources', 
-              help='Comma-separated list of specific news sources (formula1_headlines,autosport,motorsport,espn)')
 @click.option('--format', 'output_format', type=click.Choice(['terminal', 'json', 'markdown']),
               default='terminal', help='Output format')
 @click.option('--limit', default=10, help='Maximum number of news items to fetch')
@@ -81,27 +63,23 @@ def fetch_news_logic(source, sources, output_format, limit, team, driver, keywor
 @click.option('--keyword', help='Filter by custom keyword')
 @click.version_option()
 @click.pass_context
-def main(ctx, source, sources, output_format, limit, team, driver, keyword):
+def main(ctx, output_format, limit, team, driver, keyword):
     """F1 News CLI - Fetch the latest F1 news from social media."""
     if ctx.invoked_subcommand is None:
         # No subcommand provided, so run fetch by default
-        fetch_news_logic(source, sources, output_format, limit, team, driver, keyword)
+        fetch_news_logic(output_format, limit, team, driver, keyword)
 
 
 @main.command()
-@click.option('--source', type=click.Choice(['rss']),
-              default='rss', help='Source to fetch news from')
-@click.option('--sources', 
-              help='Comma-separated list of specific news sources (formula1_headlines,autosport,motorsport,espn)')
 @click.option('--format', 'output_format', type=click.Choice(['terminal', 'json', 'markdown']),
               default='terminal', help='Output format')
 @click.option('--limit', default=10, help='Maximum number of news items to fetch')
 @click.option('--team', help='Filter by F1 team')
 @click.option('--driver', help='Filter by F1 driver')
 @click.option('--keyword', help='Filter by custom keyword')
-def fetch(source, sources, output_format, limit, team, driver, keyword):
+def fetch(output_format, limit, team, driver, keyword):
     """Fetch the latest F1 news."""
-    fetch_news_logic(source, sources, output_format, limit, team, driver, keyword)
+    fetch_news_logic(output_format, limit, team, driver, keyword)
 
 
 @main.command()
@@ -184,44 +162,27 @@ def sources():
 
 
 @main.command()
-@click.option('--practice', type=click.Choice(['1', '2', '3', 'all']),
-              help='Show practice session results (1, 2, 3, or all)')
 @click.option('--session', type=click.Choice(['race', 'qualifying', 'practice']),
               default='race', help='Type of session to show results for')
-def result(practice, session):
+def result(session):
     """Show the most recent F1 session results."""
     
     try:
         source = RaceResultSource()
         formatter = ResultFormatter()
         
-        if practice or session == 'practice':
+        if session == 'practice':
             # Handle practice sessions
-            if practice == 'all':
-                console.print("[bold blue]Fetching all practice session results...[/bold blue]")
-                practice_results = source.fetch_practice_results()
-            elif practice:
-                practice_num = int(practice)
-                console.print(f"[bold blue]Fetching Practice {practice_num} results...[/bold blue]")
-                practice_results = source.fetch_practice_results(practice_num)
-            else:
-                console.print("[bold blue]Fetching all practice session results...[/bold blue]")
-                practice_results = source.fetch_practice_results()
-            
-            if not practice_results:
-                console.print("[yellow]No practice session results found.[/yellow]")
-                return
-            
-            # Display each practice session
-            for practice_result in practice_results:
-                formatter.format_results(practice_result)
-                console.print()  # Add spacing between sessions
+            console.print("[bold blue]Fetching all practice session results...[/bold blue]")
+            results = source.fetch_latest_results(session_type='practice')
+        elif session == 'qualifying':
+            console.print("[bold blue]Fetching latest F1 qualifying results...[/bold blue]")
+            results = source.fetch_latest_results(session_type='qualifying')
         else:
-            # Handle race/qualifying sessions (existing behavior)
             console.print("[bold blue]Fetching latest F1 race results...[/bold blue]")
-            race_results = source.fetch_latest_results()
-            formatter.format_results(race_results)
-        
+            results = source.fetch_latest_results(session_type='race')
+        formatter.format_results(results)
+
     except Exception as e:
         console.print(f"[red]Error fetching session results: {e}[/red]")
 

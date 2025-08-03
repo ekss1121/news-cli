@@ -146,47 +146,107 @@ class ResultFormatter:
         console.print(f"[yellow]Location: {race_results.circuit}[/yellow]")
         console.print(f"[green]Date: {race_results.date.strftime('%B %d, %Y')}[/green]\n")
         
-        # Results table
+        # Results table with different columns for qualifying vs race/practice
         table = Table(title=f"{session_type} Results")
         table.add_column("Pos", style="bold white", width=4)
         table.add_column("Driver", style="magenta", width=20)
         table.add_column("Team", style="cyan", width=25)
-        table.add_column("Time", style="yellow", width=15)
-        table.add_column("Points", style="green", width=8)
-        table.add_column("Fastest Lap", style="red", width=12)  # Fastest Lap
         
-        # Find the overall fastest lap time
-        fastest_overall = None
-        fastest_time = float('inf')
-        for result in race_results.results:
-            if result.fastest_lap:  # If driver has a fastest lap time
-                # Parse time string to compare (format: "M:SS.sss")
-                try:
-                    parts = result.fastest_lap.split(':')
-                    if len(parts) == 2:
-                        minutes = int(parts[0])
-                        seconds = float(parts[1])
-                        total_seconds = minutes * 60 + seconds
-                        if total_seconds < fastest_time:
-                            fastest_time = total_seconds
-                            fastest_overall = result.fastest_lap
-                except:
-                    pass
+        # Different columns for qualifying vs other sessions
+        if session_type == "Qualifying":
+            table.add_column("Best Time", style="yellow", width=15)
+            table.add_column("Gap", style="red", width=12)
+        else:
+            table.add_column("Time", style="yellow", width=15)
+            table.add_column("Points", style="green", width=8)
+            table.add_column("Fastest Lap", style="red", width=12)
         
-        for result in race_results.results:
-            # Highlight the overall fastest lap in purple
-            fastest_lap_display = result.fastest_lap
-            if result.fastest_lap == fastest_overall:
-                fastest_lap_display = f"[purple]{result.fastest_lap}[/purple]"
+        if session_type == "Qualifying":
+            # For qualifying, find the fastest overall time and calculate gaps
+            fastest_overall_time = None
+            fastest_time_seconds = float('inf')
             
-            table.add_row(
-                str(result.position),
-                result.driver,
-                result.team,
-                result.time,
-                str(result.points),
-                fastest_lap_display
-            )
+            # Find the fastest qualifying time (position 1)
+            if race_results.results:
+                pole_result = race_results.results[0]  # Position 1 should be fastest
+                if pole_result.fastest_lap:
+                    try:
+                        parts = pole_result.fastest_lap.split(':')
+                        if len(parts) == 2:
+                            minutes = int(parts[0])
+                            seconds = float(parts[1])
+                            fastest_time_seconds = minutes * 60 + seconds
+                            fastest_overall_time = pole_result.fastest_lap
+                    except:
+                        pass
+            
+            for result in race_results.results:
+                # For qualifying, use fastest_lap as the qualifying time
+                best_time = result.fastest_lap if result.fastest_lap else "No time"
+                
+                # Calculate gap to pole position
+                gap_display = ""
+                if result.position == 1:
+                    gap_display = "Pole"
+                elif result.fastest_lap and fastest_time_seconds != float('inf'):
+                    try:
+                        parts = result.fastest_lap.split(':')
+                        if len(parts) == 2:
+                            minutes = int(parts[0])
+                            seconds = float(parts[1])
+                            driver_time_seconds = minutes * 60 + seconds
+                            gap_seconds = driver_time_seconds - fastest_time_seconds
+                            if gap_seconds >= 1:
+                                gap_display = f"+{gap_seconds:.3f}s"
+                            else:
+                                gap_display = f"+{gap_seconds:.3f}s"
+                    except:
+                        gap_display = ""
+                
+                # Highlight pole position in purple
+                if result.position == 1 and best_time:
+                    best_time = f"[purple]{best_time}[/purple]"
+                
+                table.add_row(
+                    str(result.position),
+                    result.driver,
+                    result.team,
+                    best_time,
+                    gap_display
+                )
+        else:
+            # For race/practice sessions, find the overall fastest lap time
+            fastest_overall = None
+            fastest_time = float('inf')
+            for result in race_results.results:
+                if result.fastest_lap:  # If driver has a fastest lap time
+                    # Parse time string to compare (format: "M:SS.sss")
+                    try:
+                        parts = result.fastest_lap.split(':')
+                        if len(parts) == 2:
+                            minutes = int(parts[0])
+                            seconds = float(parts[1])
+                            total_seconds = minutes * 60 + seconds
+                            if total_seconds < fastest_time:
+                                fastest_time = total_seconds
+                                fastest_overall = result.fastest_lap
+                    except:
+                        pass
+            
+            for result in race_results.results:
+                # Highlight the overall fastest lap in purple
+                fastest_lap_display = result.fastest_lap
+                if result.fastest_lap == fastest_overall:
+                    fastest_lap_display = f"[purple]{result.fastest_lap}[/purple]"
+                
+                table.add_row(
+                    str(result.position),
+                    result.driver,
+                    result.team,
+                    result.time,
+                    str(result.points),
+                    fastest_lap_display
+                )
         
         console.print(table)
         
